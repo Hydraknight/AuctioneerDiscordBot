@@ -12,3 +12,5 @@ Contains base prices of each set
 
 set_colors.json:
 Contains the integer value of colors for each set
+
+Replace TOKEN at the end with your bot token or use an environment variable.
