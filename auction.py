@@ -920,8 +920,8 @@ async def complete_sale(channel):
     except asyncio.TimeoutError:
         # Create an embed for the timeout message
         timeout_embed = discord.Embed(
-            title="Reset Timed Out",
-            description="Reset operation timed out. No changes were made.",
+            title="Player Still On Sale",
+            description="Unsold marking canceled.",
             color=discord.Color.red()
         )
         await channel.send(embed=timeout_embed)
