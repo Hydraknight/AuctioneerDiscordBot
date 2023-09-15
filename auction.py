@@ -7,6 +7,56 @@ import random
 import pytz
 from datetime import datetime
 import json
+import pickle
+
+counter = 0
+# iterate through files to find highest numbered .pkl file
+pkls = []
+for files in os.listdir():
+    if files.endswith(".pkl"):
+        file = files.removesuffix(".pkl")
+        file = files.removeprefix("data_")
+        pkls.append(file)
+print(pkls)
+filename = str(max(pkls))
+filename = "data_"+filename
+
+
+def load_data(filename):
+    try:
+        with open(filename, 'rb') as file:
+            data = pickle.load(file)
+        return data
+    except FileNotFoundError:
+        # Handle the case where the file doesn't exist (e.g., for the first run)
+        return None
+    except Exception as e:
+        # Handle other exceptions, e.g., if the file format is invalid
+        print(f"Error loading data: {e}")
+        return None
+
+# Function to save all relevant data to a pickle file
+
+
+def save_data(data_to_save):
+    global counter
+    try:
+        # Increment the counter for the next file name
+        counter += 1
+        file_name = f'data_{counter}.pkl'
+
+        # Save the data to the pickle file
+        with open(file_name, 'wb') as file:
+            pickle.dump(data_to_save, file)
+        for i in range(1, counter-1):
+            file = f'data_{i}.pkl'
+            if os.path.exists(file):
+                os.remove(file)
+                print(f"Deleted {file}.")
+        print(f"Data saved to {file_name} successfully.")
+    except Exception as e:
+        print(f"Error saving data: {e}")
+
 
 MAX_PURSE = 100
 MAX_PLAYERS = 25
@@ -84,17 +134,64 @@ def add_trade(team1_name, team2_name, player1_name, player2_name):
     })
 
 
+auction_data = {
+    'teams': teams,
+    'purse': purse,
+    'auction_sets': auction_sets,
+    'sale_history': sale_history,
+    'unsold_players': unsold_players,
+    'full_team_names': full_team_names,
+    'team_colors': team_colors,
+    'current_auction_set': current_auction_set,
+    'current_player': current_player,
+    'current_player_price': current_player_price,
+}
 #############################################################
 # Events:
 #############################################################
+
+
 @client.event
 async def on_ready():
+    global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, current_player_price, current_player, current_auction_set, filename
     print('We have logged in as {0.user}'.format(client))
-
+    # Load data from the pickle file at the start of the bot
+    loaded_data = load_data(filename)
+    for files in os.listdir():
+        if files.endswith(".pkl"):
+            os.remove(files)
+    if loaded_data is not None:
+        # Extract individual components as needed
+        teams = loaded_data.get('teams', {})
+        purse = loaded_data.get('purse', {})
+        auction_sets = loaded_data.get('auction_sets', auction_sets)
+        sale_history = loaded_data.get('sale_history', [])
+        unsold_players = loaded_data.get('unsold_players', set())
+        full_team_names = loaded_data.get('full_team_names', {})
+        team_colors = loaded_data.get('team_colors', team_colors)
+        current_player_price = loaded_data.get('current_player_price', None)
+        current_player = loaded_data.get('current_player', None)
+        current_auction_set = loaded_data.get('current_auction_set', None)
+        # Extract more data as needed
+    else:
+        # Handle the case where no data was loaded (e.g., first run)
+        # Initialize data structures as needed
+        teams = {}
+        purse = {}
+        auction_sets = copy.deepcopy(copy_auction_sets)
+        full_team_names = {}
+        sale_history = []
+        unsold_players = set()
+        team_colors = {}
+        current_auction_set = None
+        current_player = None
+        current_player_price = None
 
 #############################################################
 # Message:
 #############################################################
+
+
 @client.event
 async def on_message(message):
     global current_auction_set
@@ -107,7 +204,6 @@ async def on_message(message):
 
     if content.startswith('$'):
         cmd = content[1:]
-        await message.delete()
         # Reset auction
         if cmd == 'reset' and is_auctioneer(user):
             await reset_sets_teams(message.channel)
@@ -229,7 +325,19 @@ async def on_message(message):
         # Showing unsold players
         elif cmd == 'showunsold':
             await show_unsold(message.channel)
-
+        save_data({
+            'teams': teams,
+            'purse': purse,
+            'auction_sets': auction_sets,
+            'sale_history': sale_history,
+            'unsold_players': unsold_players,
+            'full_team_names': full_team_names,
+            'team_colors': team_colors,
+            'current_auction_set': current_auction_set,
+            'current_player': current_player,
+            'current_player_price': current_player_price,
+        })
+        await message.delete()
 
 #############################################################
 # Reset:
@@ -275,7 +383,7 @@ async def reset_sets_teams(channel):
             purse = {}  # Reset purse
             sale_history = []
             unsold_players = set()
-
+            save_data(auction_data)
             # Create an embed for the success message
             success_embed = discord.Embed(
                 title="Reset Successful",
@@ -407,6 +515,14 @@ async def timer(secs, channel):
     else:
         secs = int(secs)
 
+    if secs > 30 or secs < 1:
+        embed = discord.Embed(
+            title="Timer",
+            description=f"Timer cannot be set for more than 30 seconds and less than 1 second.",
+            color=discord.Color.red())
+        await channel.send(embed=embed)
+        return
+
     def check_stop(reaction, user):
         return str(
             reaction.emoji) == "❌" and user != client.user and is_auctioneer(user)
@@ -452,8 +568,7 @@ async def timer(secs, channel):
 
 
 async def pop_and_send(set_name, channel):
-    global current_auction_set
-    global current_player
+    global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, current_player_price, current_player, current_auction_set
 
     if current_player is not None:
         await complete_sale(channel)
@@ -465,6 +580,7 @@ async def pop_and_send(set_name, channel):
             auction_sets[set_name].remove(player)
             current_auction_set = set_name
             base_price = base_prices.get(set_name, 'Unknown')
+            current_player_price = base_price
             color_value = embed_colors.get(set_name, "blue")
             if isinstance(color_value, str):
                 color = discord.Color(value=int(color_value, base=16))
@@ -558,8 +674,7 @@ async def show_teams(channel):
 # Selling Players:
 #############################################################
 async def sell_team(team_name, price, name, channel):
-    global current_player
-    global current_auction_set
+    global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, current_player_price, current_player, current_auction_set
 
     if team_name in teams:
         player_price = int(price)
@@ -603,15 +718,13 @@ async def sell_team(team_name, price, name, channel):
                               color=discord.Color.red())
         await channel.send(embed=embed)
 
-
 ##################################################################
 # Unsold:
 ##################################################################
+
+
 async def unsold(channel):
-    global current_auction_set
-    global current_player
-    global current_player_price
-    global unsold_players
+    global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, current_player_price, current_player, current_auction_set, auction_data
     price = 'Unknown'
     if current_player:
         price = current_player_price
@@ -626,6 +739,7 @@ async def unsold(channel):
         await channel.send(embed=embed)
         current_player = None
         current_player_price = None
+
     else:
         # Create an embedded message to indicate there is no current player to mark as unsold
         embed = discord.Embed(title="No Player Unsold",
@@ -1114,6 +1228,5 @@ async def show_help(channel):
                     inline=False)
 
     await channel.send(embed=embed)
-
 
 client.run(os.environ['TOKEN'])
