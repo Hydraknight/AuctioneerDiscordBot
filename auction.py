@@ -1,4 +1,6 @@
 import discord
+from discord.ui import Button, View
+from discord import InteractionType
 import os
 import random
 import copy
@@ -8,7 +10,7 @@ import pytz
 from datetime import datetime
 import json
 import pickle
-
+timer_running = False
 counter = 0
 # iterate through files to find highest numbered .pkl file
 pkls = []
@@ -18,8 +20,11 @@ for files in os.listdir():
         file = files.removeprefix("data_")
         pkls.append(file)
 print(pkls)
-filename = str(max(pkls))
-filename = "data_"+filename
+if len(pkls) != 0:
+    filename = str(max(pkls))
+    filename = "data_"+filename
+else:
+    filename = None
 
 
 def load_data(filename):
@@ -68,14 +73,9 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 client = discord.Client(intents=intents)
-
-# Create dictionaries to store player names by type (lowercase)
-
 teams = {}
 full_team_names = {}
-# Create a dictionary to store purse for each team
 purse = {}
-
 team_colors = {}
 with open("auction_sets.json", "r") as players_file:
     auction_sets = json.load(players_file)
@@ -153,10 +153,13 @@ auction_data = {
 
 @client.event
 async def on_ready():
-    global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, current_player_price, current_player, current_auction_set, filename
+    global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, current_player_price, current_player, current_auction_set, filename, pkls
     print('We have logged in as {0.user}'.format(client))
     # Load data from the pickle file at the start of the bot
-    loaded_data = load_data(filename)
+    if pkls != []:
+        loaded_data = load_data(filename)
+    else:
+        loaded_data = None
     for files in os.listdir():
         if files.endswith(".pkl"):
             os.remove(files)
@@ -201,143 +204,155 @@ async def on_message(message):
 
     content = message.content
     user = message.author
-
     if content.startswith('$'):
-        cmd = content[1:]
-        # Reset auction
-        if cmd == 'reset' and is_auctioneer(user):
-            await reset_sets_teams(message.channel)
-        # Shows all sets
-        elif cmd == 'sets':
-            await show_sets(message.channel)
-        # Pops a player
-        elif cmd in auction_sets and is_auctioneer(user):
-            await pop_and_send(cmd, message.channel)
-        # Starts a timer
-        elif cmd.startswith('timer '):
-            cmd_args = cmd.split(' ')
-            await timer(cmd_args[1], message.channel)
-        elif cmd == 'timer':
-            await timer('10', message.channel)
-        # Adds a new team
-        elif cmd.startswith('add ') and is_auctioneer(user):
-            cmd_args = cmd.split(' ')
-            team_name = cmd_args[1]
-            color_arg = cmd_args[2] if len(cmd_args) > 2 else None
-            full_name = ' '.join(cmd_args[3:])
-            await add_team(team_name, full_name, color_arg, message.channel)
-        # Shows details of all teams
-        elif cmd == 'teams':
-            await show_teams(message.channel)
-        # Sells the player to a team
-        elif cmd.startswith('sell') and is_auctioneer(user):
-            cmd_args = cmd.split(' ')
-            team_name = cmd_args[1]
-            price = cmd_args[2]
-            name = ' '.join(cmd_args[3:])
-            await sell_team(team_name, price, name, message.channel)
-        # Shows specified team details
-        elif cmd.lower() in str(teams.keys()).lower():
-            await show_team(cmd, message.channel)
-        # Shows Help embed
-        elif cmd == 'help':
-            await show_help(message.channel)
-        # Shows specific set
-        elif cmd.startswith('set '):
-            cmd_args = cmd.split(' ')
-            set_name = cmd_args[1]
-            await show_set(set_name, message.channel)
-        # Shows sales and trades that occurred
-        elif cmd == 'sales':
-            await show_sales(message.channel)
-        # Sets Maximum purse for all teams
-        elif cmd.startswith('setmaxpurse ') and is_auctioneer(user):
-            cmd_args = cmd.split(' ')
-            if len(cmd_args) == 2:
-                await set_max_purse(cmd_args[1], message.channel)
-            else:
-                await message.channel.send(
-                    "Invalid usage. Please use: $setmaxpurse <value>")
-        # Trade
-        elif cmd.startswith('trade ') and is_auctioneer(user):
-            cmd_args = cmd.split(' ')
-            if len(cmd_args) < 5:
-                # Invalid trade command, show an error message
-                embed = discord.Embed(title="Invalid Trade Command",
-                                      color=discord.Color.red())
-                embed.add_field(name="Usage",
-                                value="$trade <team1> <team2> <player1> <player2>")
-                await message.channel.send(embed=embed)
-            else:
-                team1_name = cmd_args[1]
-                team2_name = cmd_args[2]
-                players = ' '.join(cmd_args[3:])
-                await trade(team1_name, team2_name, players, message.channel)
-        elif cmd.startswith('setmaxplayers ') and is_auctioneer(user):
-            cmd_args = cmd.split(' ')
-            if len(cmd_args) == 2:
-                await set_max_players(cmd_args[1], message.channel)
-            else:
-                await message.channel.send(
-                    "Invalid usage. Please use: $setmaxplayers <value>")
-        # Remove player command
-        elif cmd.startswith('removeplayer ') and is_auctioneer(user):
-            cmd_args = cmd.split(' ')
-            if len(cmd_args) == 3:
+        try:
+            cmd = content[1:]
+            # Reset auction
+            if cmd == 'reset' and is_auctioneer(user):
+                await reset_sets_teams(message.channel)
+            # Shows all sets
+            elif cmd == 'sets':
+                await show_sets(message.channel)
+            # Pops a player
+            elif cmd in auction_sets and is_auctioneer(user):
+                await pop_and_send(cmd, message.channel)
+            # Starts a timer
+            elif cmd.startswith('timer '):
+                cmd_args = cmd.split(' ')
+                await timer(cmd_args[1], message.channel)
+            elif cmd == 'timer':
+                await timer('10', message.channel)
+            # Adds a new team
+            elif cmd.startswith('add ') and is_auctioneer(user):
+                cmd_args = cmd.split(' ')
                 team_name = cmd_args[1]
-                player_name = cmd_args[2]
-                await remove_player(team_name, player_name, message.channel)
-            else:
-                # Invalid usage of the removeplayer command
-                embed = discord.Embed(
-                    title="Invalid Remove Player Command",
-                    description="Usage: $removeplayer <team_name> <player_name>",
-                    color=discord.Color.red())
-                await message.channel.send(embed=embed)
-        # Selling current player
-        elif cmd.startswith('sold ') and is_auctioneer(user):
-            global current_auction_set
-            global current_player
-            cmd_args = content.split(' ')
-            team = cmd_args[1]
-            price = cmd_args[2]
-            if current_player is not None:
-                await sell_team(team, price, current_player, message.channel)
-            else:
-                await message.channel.send(
-                    "No player available to sell. Use $<set_name> to pop a player first."
-                )
-        # Requesting a player
-        elif cmd.startswith('request '):
-            cmd_args = cmd.split(' ')
-            if len(cmd_args) > 1:
-                requested_player = ' '.join(cmd_args[1:])
-                await request_player(user, requested_player, message.channel)
-            else:
-                await message.channel.send(
-                    "Invalid usage. Please use: $request <player_name>")
-        # Marking current player as unsold
-        elif cmd == 'unsold' and is_auctioneer(user):
-            await unsold(message.channel)
-        # Getting a random unsold player
-        elif cmd == 'getunsold' and is_auctioneer(user):
-            await get_unsold(message.channel)
-        # Showing unsold players
-        elif cmd == 'showunsold':
-            await show_unsold(message.channel)
-        save_data({
-            'teams': teams,
-            'purse': purse,
-            'auction_sets': auction_sets,
-            'sale_history': sale_history,
-            'unsold_players': unsold_players,
-            'full_team_names': full_team_names,
-            'team_colors': team_colors,
-            'current_auction_set': current_auction_set,
-            'current_player': current_player,
-            'current_player_price': current_player_price,
-        })
-        await message.delete()
+                color_arg = cmd_args[2] if len(cmd_args) > 2 else None
+                full_name = ' '.join(cmd_args[3:])
+                await add_team(team_name, full_name, color_arg, message.channel)
+            # Shows details of all teams
+            elif cmd == 'teams':
+                await show_teams(message.channel)
+            # Sells the player to a team
+            elif cmd.startswith('sell') and is_auctioneer(user):
+                cmd_args = cmd.split(' ')
+                team_name = cmd_args[1]
+                price = cmd_args[2]
+                name = ' '.join(cmd_args[3:])
+                await sell_team(team_name, price, name, message.channel)
+            # Shows specified team details
+            elif cmd.lower() in str(teams.keys()).lower():
+                await show_team(cmd, message.channel)
+            # Shows Help embed
+            elif cmd == 'help':
+                await show_help(message.channel)
+            # Shows specific set
+            elif cmd.startswith('set '):
+                cmd_args = cmd.split(' ')
+                set_name = cmd_args[1]
+                await show_set(set_name, message.channel)
+            # Shows sales and trades that occurred
+            elif cmd == 'sales':
+                await show_sales(message.channel)
+            # Sets Maximum purse for all teams
+            elif cmd.startswith('setmaxpurse ') and is_auctioneer(user):
+                cmd_args = cmd.split(' ')
+                if len(cmd_args) == 2:
+                    await set_max_purse(cmd_args[1], message.channel)
+                else:
+                    await message.channel.send(
+                        "Invalid usage. Please use: $setmaxpurse <value>")
+            # Trade
+            elif cmd.startswith('trade ') and is_auctioneer(user):
+                cmd_args = cmd.split(' ')
+                if len(cmd_args) < 5:
+                    # Invalid trade command, show an error message
+                    embed = discord.Embed(title="Invalid Trade Command",
+                                          color=discord.Color.red())
+                    embed.add_field(name="Usage",
+                                    value="$trade <team1> <team2> <player1> <player2>")
+                    await message.channel.send(embed=embed)
+                else:
+                    team1_name = cmd_args[1]
+                    team2_name = cmd_args[2]
+                    players = ' '.join(cmd_args[3:])
+                    await trade(team1_name, team2_name, players, message.channel)
+            elif cmd.startswith('setmaxplayers ') and is_auctioneer(user):
+                cmd_args = cmd.split(' ')
+                if len(cmd_args) == 2:
+                    await set_max_players(cmd_args[1], message.channel)
+                else:
+                    await message.channel.send(
+                        "Invalid usage. Please use: $setmaxplayers <value>")
+            # Remove player command
+            elif cmd.startswith('removeplayer ') and is_auctioneer(user):
+                cmd_args = cmd.split(' ')
+                if len(cmd_args) == 3:
+                    team_name = cmd_args[1]
+                    player_name = cmd_args[2]
+                    await remove_player(team_name, player_name, message.channel)
+                else:
+                    # Invalid usage of the removeplayer command
+                    embed = discord.Embed(
+                        title="Invalid Remove Player Command",
+                        description="Usage: $removeplayer <team_name> <player_name>",
+                        color=discord.Color.red())
+                    await message.channel.send(embed=embed)
+            # Selling current player
+            elif cmd.startswith('sold ') and is_auctioneer(user):
+                global current_auction_set
+                global current_player
+                cmd_args = content.split(' ')
+                team = cmd_args[1]
+                price = cmd_args[2]
+                if current_player is not None:
+                    await sell_team(team, price, current_player, message.channel)
+                else:
+                    await message.channel.send(
+                        "No player available to sell. Use $<set_name> to pop a player first."
+                    )
+            # Requesting a player
+            elif cmd.startswith('request '):
+                cmd_args = cmd.split(' ')
+                if len(cmd_args) > 1:
+                    requested_player = ' '.join(cmd_args[1:])
+                    await request_player(user, requested_player, message.channel)
+                else:
+                    await message.channel.send(
+                        "Invalid usage. Please use: $request <player_name>")
+            # Marking current player as unsold
+            elif cmd == 'unsold' and is_auctioneer(user):
+                await unsold(message.channel)
+            # Getting a random unsold player
+            elif cmd == 'getunsold' and is_auctioneer(user):
+                await get_unsold(message.channel)
+            # Showing unsold players
+            elif cmd == 'showunsold':
+                await show_unsold(message.channel)
+            save_data({
+                'teams': teams,
+                'purse': purse,
+                'auction_sets': auction_sets,
+                'sale_history': sale_history,
+                'unsold_players': unsold_players,
+                'full_team_names': full_team_names,
+                'team_colors': team_colors,
+                'current_auction_set': current_auction_set,
+                'current_player': current_player,
+                'current_player_price': current_player_price,
+            })
+            await message.delete()
+        except Exception as e:
+            print(e)
+            save_data({'teams': teams,
+                       'purse': purse,
+                       'auction_sets': auction_sets,
+                       'sale_history': sale_history,
+                       'unsold_players': unsold_players,
+                       'full_team_names': full_team_names,
+                       'team_colors': team_colors,
+                       'current_auction_set': current_auction_set,
+                       'current_player': current_player,
+                       'current_player_price': current_player_price, })
 
 #############################################################
 # Reset:
@@ -345,68 +360,68 @@ async def on_message(message):
 
 
 async def reset_sets_teams(channel):
-    global auction_sets
-    global teams
-    global purse
-    global sale_history
-    global unsold_players
 
     # Create an embed for the confirmation message
     confirmation_embed = discord.Embed(
         title="Reset Confirmation",
         description="WARNING: This action will reset all sets and teams.",
-        color=discord.Color.orange())
+        color=discord.Color.from_str("#FFFFFF"))
     confirmation_embed.add_field(
-        name="Confirmation:",
-        value="React with ✅ to confirm or ❌ to cancel..",
-        inline=False)
+        name="Confirmation:", value="Are you sure you want to reset all sets and teams?")
 
     # Send the confirmation embed
     confirmation_message = await channel.send(embed=confirmation_embed)
-
+    confirm = Button(style=discord.ButtonStyle.green, label="Confirm")
+    cancel = Button(style=discord.ButtonStyle.red, label="Cancel")
+    view = View()
+    view.add_item(confirm)
+    view.add_item(cancel)
+    await confirmation_message.edit(view=view)
     # Add reactions to the confirmation message
-    await confirmation_message.add_reaction("✅")  # Check mark
-    await confirmation_message.add_reaction("❌")  # X mark
 
-    def check(reaction, user):
-        return is_auctioneer(user) and str(reaction.emoji) in ["✅", "❌"]
+    def check_stop(interaction):
+        return is_auctioneer(interaction.user) and interaction.message == confirmation_message
 
-    try:
-        reaction, _ = await client.wait_for("reaction_add",
-                                            check=check,
-                                            timeout=30)
-
-        if str(reaction.emoji) == "✅":
-            # Reset all sets and teams
+    # Define a check function to check which button they clicked
+    async def confirmed(interaction):
+        global auction_sets
+        global teams
+        global purse
+        global sale_history
+        global unsold_players
+        global current_player
+        global current_auction_set
+        global current_player_price
+        if interaction.message == confirmation_message and is_auctioneer(interaction.user):
             auction_sets = copy.deepcopy(copy_auction_sets)
             teams = {}  # Reset teams
             purse = {}  # Reset purse
             sale_history = []
             unsold_players = set()
+            current_player = None
+            current_auction_set = None
+            current_player_price = None
             save_data(auction_data)
-            # Create an embed for the success message
+
             success_embed = discord.Embed(
                 title="Reset Successful",
                 description="All sets and teams have been reset.",
                 color=discord.Color.green())
             await channel.send(embed=success_embed)
-        else:
-            # Create an embed for the cancellation message
+            await confirmation_message.delete()
+        return
+
+    async def cancel_check(interaction):
+        if interaction.message == confirmation_message and is_auctioneer(interaction.user):
             cancel_embed = discord.Embed(title="Reset Canceled",
                                          description="Reset operation canceled.",
                                          color=discord.Color.red())
             await channel.send(embed=cancel_embed)
+            await confirmation_message.delete()
+        return
 
-        await confirmation_message.delete()
-
-    except asyncio.TimeoutError:
-        # Create an embed for the timeout message
-        timeout_embed = discord.Embed(
-            title="Reset Timed Out",
-            description="Reset operation timed out. No changes were made.",
-            color=discord.Color.red())
-        await channel.send(embed=timeout_embed)
-        await confirmation_message.delete()
+    confirm.callback = confirmed
+    cancel.callback = cancel_check
 
 
 #############################################################
@@ -438,7 +453,7 @@ async def show_set(set_name, channel):
         players_message += f'**{player}**\n'
     color_value = embed_colors.get(set_name, "blue")
     if isinstance(color_value, str):
-        color = discord.Color(value=int(color_value, base=16))
+        color = discord.Color.from_str(color_value)
     else:
         color = discord.Color(value=color_value)
 
@@ -507,9 +522,26 @@ async def set_max_players(new_max_players, channel):
 #############################################################
 # Timer:
 #############################################################
+async def deny_timer(channel):
+    global timer_running
+
+    if timer_running:
+        embed = discord.Embed(
+            title="Timer Already Running",
+            description="A timer is currently running. You cannot start a new timer until the current one finishes.",
+            color=discord.Color.red())
+        msg = await channel.send(embed=embed)
+        await asyncio.sleep(2)
+        await msg.delete()
+        return True  # Return True to indicate denial
+    else:
+        return False  # Return False to indicate permission
 
 
 async def timer(secs, channel):
+    global timer_running
+    if await deny_timer(channel):
+        return
     if secs is None:
         secs = 10
     else:
@@ -522,10 +554,10 @@ async def timer(secs, channel):
             color=discord.Color.red())
         await channel.send(embed=embed)
         return
+    timer_running = True
 
-    def check_stop(reaction, user):
-        return str(
-            reaction.emoji) == "❌" and user != client.user and is_auctioneer(user)
+    def check_stop(interaction):
+        return is_auctioneer(interaction.user) and interaction.message == timer_message
 
     async def update_timer_message(embed, remaining_time):
         embed.description = f"Remaining time: {remaining_time}"
@@ -535,33 +567,49 @@ async def timer(secs, channel):
                           description=f"Remaining time: {secs}",
                           color=discord.Color.blue())
     timer_message = await channel.send(embed=embed)
-    await timer_message.add_reaction("❌")
+    view = View()
+    stop_button = Button(style=discord.ButtonStyle.danger, label="Stop")
+    view.add_item(stop_button)
+
+    # Set the initial value of the flag
+    timer_stopped = False
+
+    async def on_button_click(interaction):
+        nonlocal timer_stopped
+        global timer_running
+        if check_stop(interaction):
+            timer_stopped = True
+            timer_running = False
+
+    # Set the button callback
+    stop_button.callback = on_button_click
+
+    await timer_message.edit(view=view)
+
     for remaining_time in range(secs - 1, 0, -1):
-        await asyncio.sleep(0.1)  # Wait for 1 second per interval
+        await asyncio.sleep(0.5)  # Wait for 1 second per interval
         await update_timer_message(embed, remaining_time)
 
-        try:
-            reaction, _ = await client.wait_for("reaction_add",
-                                                check=check_stop,
-                                                timeout=0.5)
+        # Check if the timer should be stopped
+        if timer_stopped:
             await timer_message.edit(
-                embed=discord.Embed(title="Timer",
-                                    description="Timer has been stopped!",
-                                    color=discord.Color.red()))
+                embed=discord.Embed(
+                    title="Timer",
+                    description="Timer has been stopped!",
+                    color=discord.Color.red()),
+                view=None)
+            timer_running = False
             return
-        except asyncio.TimeoutError:
-            pass
 
     await timer_message.edit(embed=discord.Embed(
-        title="Timer", description="Time's up!", color=discord.Color.red()))
+        title="Timer", description="Time's up!", color=discord.Color.red()), view=None)
     embed = discord.Embed(title="Timer",
                           description="Time's up!",
                           color=discord.Color.red())
     embed.set_thumbnail(
         url="https://cdn.discordapp.com/emojis/880003196339236884.png")
+    timer_running = False
     await channel.send(embed=embed)
-
-
 #############################################################
 # Pop Players:
 #############################################################
@@ -583,7 +631,7 @@ async def pop_and_send(set_name, channel):
             current_player_price = base_price
             color_value = embed_colors.get(set_name, "blue")
             if isinstance(color_value, str):
-                color = discord.Color(value=int(color_value, base=16))
+                color = discord.Color.from_str(color_value)
             else:
                 color = discord.Color(value=color_value)
 
@@ -875,93 +923,82 @@ async def request_player(user, player_name, channel):
         )
         confirmation_embed.add_field(
             name="Auctioneer to confirm:",
-            value="React with ✅ for Yes or ❌ for No..",
+            value="Please confirm or deny this request.",
             inline=False
         )
 
+        def check_stop(interaction):
+            return is_auctioneer(interaction.user) and interaction.message == confirmation_message
         # Send the confirmation embed
         confirmation_message = await channel.send(embed=confirmation_embed)
+        confirm = Button(style=discord.ButtonStyle.green, label="Confirm")
+        cancel = Button(style=discord.ButtonStyle.red, label="Cancel")
+        view = View()
+        view.add_item(confirm)
+        view.add_item(cancel)
+        await confirmation_message.edit(view=view)
 
-        # Add reactions to the confirmation message
-        await confirmation_message.add_reaction("✅")  # Check mark
-        await confirmation_message.add_reaction("❌")  # X mark
-
-        def check(reaction, reactor):
-            return is_auctioneer(reactor) and str(reaction.emoji) in ["✅", "❌"]
-
-        try:
-            reaction, _ = await client.wait_for("reaction_add", check=check, timeout=30)
-
-            if str(reaction.emoji) == "✅":
-                pass
-            elif str(reaction.emoji) == "❌":
-                # Create an embed for the cancellation message
-                cancel_embed = discord.Embed(
-                    title="Denied request",
-                    description=f"Request denied  for **{player_name}**.",
-                    color=discord.Color.red()
-                )
-                await channel.send(embed=cancel_embed)
-                await confirmation_message.delete()
-                return
-
+        # Define a check function to check which button they clicked
+        async def confirmed(interaction):
+            # Check if the requested player is in any of the auction sets
             await confirmation_message.delete()
+            for set_name, players in auction_sets.items():
+                if player_name in players:
+                    # Send the player's card
+                    base_price = base_prices.get(set_name, 'Unknown')
+                    color_value = embed_colors.get(set_name, "blue")
+                    if isinstance(color_value, str):
+                        color = discord.Color.from_str(color_value)
+                    else:
+                        color = discord.Color(value=color_value)
 
-        except asyncio.TimeoutError:
-            # Create an embed for the timeout message
-            timeout_embed = discord.Embed(
+                    embed = discord.Embed(
+                        title=f"**{player_name}**",
+                        description=f"Base Price: {base_price}\n Set: {set_name}",
+                        color=color
+                    )
+                    await channel.send(embed=embed)
+
+                    # Remove the player from the auction set
+                    current_player = player_name
+                    players.remove(player_name)
+                    return
+
+            # Check if the requested player is in the unsold players set
+            for player, base_price in unsold_players:
+                if player == player_name:
+                    # Send the player's card
+                    embed = discord.Embed(
+                        title=f"**{player_name}**",
+                        description=f"Base Price: {base_price},\n Set: Unsold Players",
+                        color=discord.Color.greyple()
+                    )
+                    await channel.send(embed=embed)
+                    # Remove the player from the unsold players set
+                    current_player = player
+                    unsold_players.remove((player, base_price))
+                    return
+
+            # If the player is not found in either set, send a message
+            embed = discord.Embed(
+                title=f"Player Not Found: {player_name}",
+                description="The requested player was not found in the auction sets or the unsold players set.",
+                color=discord.Color.red()
+            )
+            await channel.send(embed=embed)
+
+        async def cancel_check(interaction):
+            cancel_embed = discord.Embed(
                 title="Denied request",
                 description=f"Request denied  for **{player_name}**.",
                 color=discord.Color.red()
             )
-            await channel.send(embed=timeout_embed)
+            await channel.send(embed=cancel_embed)
             await confirmation_message.delete()
+            return
+        confirm.callback = confirmed
+        cancel.callback = cancel_check
 
-        # Check if the requested player is in any of the auction sets
-        for set_name, players in auction_sets.items():
-            if player_name in players:
-                # Send the player's card
-                base_price = base_prices.get(set_name, 'Unknown')
-                color_value = embed_colors.get(set_name, "blue")
-                if isinstance(color_value, str):
-                    color = discord.Color(value=int(color_value, base=16))
-                else:
-                    color = discord.Color(value=color_value)
-
-                embed = discord.Embed(
-                    title=f"Requested Player: **{player_name}**",
-                    description=f"Base Price: {base_price}",
-                    color=color
-                )
-                await channel.send(embed=embed)
-
-                # Remove the player from the auction set
-                current_player = player_name
-                players.remove(player_name)
-                return
-
-        # Check if the requested player is in the unsold players set
-        for player, base_price in unsold_players:
-            if player == player_name:
-                # Send the player's card
-                embed = discord.Embed(
-                    title=f"Requested Player: {player_name}",
-                    description=f"Base Price: {base_price}",
-                    color=discord.Color.blue()
-                )
-                await channel.send(embed=embed)
-                # Remove the player from the unsold players set
-                current_player = player
-                unsold_players.remove((player, base_price))
-                return
-
-        # If the player is not found in either set, send a message
-        embed = discord.Embed(
-            title=f"Player Not Found: {player_name}",
-            description="The requested player was not found in the auction sets or the unsold players set.",
-            color=discord.Color.red()
-        )
-        await channel.send(embed=embed)
 
 ##################################################################
 # Showing Team:
@@ -1123,54 +1160,43 @@ async def complete_sale(channel):
         description=f'**{current_player}** is currently being bid for.',
         color=discord.Color.red())
     confirmation_embed.add_field(name="Do you wish to mark as Unsold?:",
-                                 value="React with ✅ for Yes or ❌ for No..",
+                                 value="Please confirm or deny this request.",
                                  inline=False)
 
     # Send the confirmation embed
     confirmation_message = await channel.send(embed=confirmation_embed)
+    confirm = Button(style=discord.ButtonStyle.green, label="Confirm")
+    cancel = Button(style=discord.ButtonStyle.red, label="Cancel")
+    view = View()
+    view.add_item(confirm)
+    view.add_item(cancel)
+    await confirmation_message.edit(view=view)
 
-    # Add reactions to the confirmation message
-    await confirmation_message.add_reaction("✅")  # Check mark
-    await confirmation_message.add_reaction("❌")  # X mark
-
-    def check(reaction, user):
-        return is_auctioneer(user) and str(reaction.emoji) in ["✅", "❌"]
-
-    try:
-        reaction, _ = await client.wait_for("reaction_add",
-                                            check=check,
-                                            timeout=30)
-
-        if str(reaction.emoji) == "✅":
-
-            # Create an embed for the success message
-            await unsold(channel)
-        else:
-            # Create an embed for the cancellation message
-            cancel_embed = discord.Embed(title="Player Still On Sale",
-                                         description="Unsold marking canceled.",
-                                         color=discord.Color.red())
-            await channel.send(embed=cancel_embed)
-
+    # Define a check function to check which button they clicked
+    async def confirmed(interaction):
+        await unsold(channel)
         await confirmation_message.delete()
+        return
 
-    except asyncio.TimeoutError:
-        # Create an embed for the timeout message
-        timeout_embed = discord.Embed(title="Player Still On Sale",
-                                      description="Unsold marking canceled.",
-                                      color=discord.Color.red())
-        await channel.send(embed=timeout_embed)
+    async def cancel_check(interaction):
+        cancel_embed = discord.Embed(title="Player Still On Sale",
+                                     description="Unsold marking canceled.",
+                                     color=discord.Color.red())
+        await channel.send(embed=cancel_embed)
         await confirmation_message.delete()
+        return
+
+    confirm.callback = confirmed
+    cancel.callback = cancel_check
 
 
 ##################################################################
 # Showing Help:
 ##################################################################
 async def show_help(channel):
-    embed = discord.Embed(title='Help',
+    embed = discord.Embed(title='Help Commands for Auctioneer:',
                           description='Here are the available commands:',
-                          color=discord.Color.blue())
-    embed.add_field(name='Commands for Auctioneer:', value='', inline=False)
+                          color=discord.Color.red())
     embed.add_field(name='$add <shorthand> <color> <team_name>',
                     value='Creates a new team with the given name.',
                     inline=False)
@@ -1202,7 +1228,10 @@ async def show_help(channel):
     embed.add_field(name='$getunsold',
                     value='Gets a player from the unsold list.',
                     inline=False)
-    embed.add_field(name='Commands for everyone:', value='', inline=False)
+    await channel.send(embed=embed)
+    embed = discord.Embed(title='Help Commands for All Users:',
+                          description='Here are the available commands:',
+                          color=discord.Color.brand_green())
     embed.add_field(name='$request <player>',
                     value='Shows the player if available.',
                     inline=False)
@@ -1229,4 +1258,6 @@ async def show_help(channel):
 
     await channel.send(embed=embed)
 
+
 client.run(os.environ['TOKEN'])
+
