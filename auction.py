@@ -10,8 +10,12 @@ import pytz
 from datetime import datetime
 import json
 import pickle
+from keep_alive import keep_alive
+
+keep_alive()
 timer_running = False
 counter = 0
+sales_channel = None
 # iterate through files to find highest numbered .pkl file
 pkls = []
 for files in os.listdir():
@@ -199,6 +203,7 @@ async def on_ready():
 async def on_message(message):
     global current_auction_set
     global current_player
+    global sales_channel
     if message.author == client.user:
         return
 
@@ -208,6 +213,10 @@ async def on_message(message):
         try:
             cmd = content[1:]
             # Reset auction
+            if cmd == 'ping':
+                # calculate ping time
+                ping = round(client.latency * 1000)
+                await message.channel.send('Pong! {}ms'.format(ping))
             if cmd == 'reset' and is_auctioneer(user):
                 await reset_sets_teams(message.channel)
             # Shows all sets
@@ -328,6 +337,16 @@ async def on_message(message):
             # Showing unsold players
             elif cmd == 'showunsold':
                 await show_unsold(message.channel)
+            elif cmd.startswith('saleschannel') and is_auctioneer(user):
+                args = cmd.split(' ')
+                if len(args) == 2:
+                    channel_id = int(args[1])
+                    channel = client.get_channel(channel_id)
+                    if channel is not None:
+                        sales_channel = channel
+                        await message.channel.send(f"Sales channel set to {sales_channel}")
+                    else:
+                        await message.channel.send("Invalid channel ID.")
             save_data({
                 'teams': teams,
                 'purse': purse,
@@ -722,7 +741,7 @@ async def show_teams(channel):
 # Selling Players:
 #############################################################
 async def sell_team(team_name, price, name, channel):
-    global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, current_player_price, current_player, current_auction_set
+    global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, current_player_price, current_player, current_auction_set, sales_channel
 
     if team_name in teams:
         player_price = int(price)
@@ -748,11 +767,14 @@ async def sell_team(team_name, price, name, channel):
                     description=f'**{name}** has been sold to **{full_team_names[team_name]}** for **{player_price/100:.2f}Cr**.',
                     color=color)
                 await channel.send(embed=embed)
+                if sales_channel:
+                  await sales_channel.send(embed=embed)  # type: ignore
                 for set_name, players in auction_sets.items():
                     if name in players:
                         players.remove(name)
                 current_player = None  # Reset the current player name
                 current_auction_set = None  # Reset the current auction set name
+               
             else:
                 embed = discord.Embed(
                     title=f'Team Over Budget!: {team_name}',
@@ -1051,30 +1073,39 @@ async def show_sales(channel):
         # Sort the sale history by timestamp
         sorted_history = sorted(sale_history, key=lambda x: x['timestamp'])
 
-        history_message = ""
-        for entry in sorted_history:
-            timestamp = entry["timestamp"]
-            if entry["type"] == "sale":
-                history_message += f'[{timestamp} IST] **{entry["player_name"]}** sold to **{entry["team_name"]}** for **{entry["price"]}Cr**\n'
-            elif entry["type"] == "trade":
-                history_message += f'[{timestamp} IST] **{entry["team_1"]}** traded **{entry["player_1"]}** to **{entry["team_2"]}** for **{entry["player_2"]}**\n'
+        # Split the sorted_history into chunks of 30 entries each
+        chunk_size = 30
+        chunks = [
+            sorted_history[i:i + chunk_size]
+            for i in range(0, len(sorted_history), chunk_size)
+        ]
 
-    # Create an embedded message to display the combined sales message
-        embed = discord.Embed(title='Sales and Trade History',
-                              description=history_message,
-                              color=discord.Color.blue())
+        for chunk in chunks:
+            history_message = ""
+            for entry in chunk:
+                timestamp = entry["timestamp"]
+                if entry["type"] == "sale":
+                    history_message += f'[{timestamp} IST] **{entry["player_name"]}** sold to **{entry["team_name"]}** for **{entry["price"]}Cr**\n'
+                elif entry["type"] == "trade":
+                    history_message += f'[{timestamp} IST] **{entry["team_1"]}** traded **{entry["player_1"]}** to **{entry["team_2"]}** for **{entry["player_2"]}**\n'
+
+            # Create an embedded message to display the combined sales message for this chunk
+            embed = discord.Embed(title='Sales and Trade History',
+                                  description=history_message,
+                                  color=discord.Color.blue())
+            await channel.send(embed=embed)
     else:
         embed = discord.Embed(title='Sales and Trade History',
                               description='No sales or trades have been made yet.',
                               color=discord.Color.blue())
-
-    await channel.send(embed=embed)
+        await channel.send(embed=embed)
 
 
 ##################################################################
 # Trade:
 ##################################################################
 async def trade(team1_name, team2_name, players, channel):
+    global sales_channel
     # Split the players argument into two player names using a delimiter ("/")
     player_names = players.split('/')
     if len(player_names) != 2:
@@ -1143,6 +1174,8 @@ async def trade(team1_name, team2_name, players, channel):
         value=f"{player1_name} from {team1_name} traded for {player2_name} from {team2_name}."
     )
     await channel.send(embed=embed)
+    if sales_channel:
+                  await sales_channel.send(embed=embed)  # type: ignore
 
 
 ##################################################################
@@ -1259,5 +1292,21 @@ async def show_help(channel):
     await channel.send(embed=embed)
 
 
-client.run(os.environ['TOKEN'])
+@client.event
+async def on_disconnect():
+  global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, current_player_price, current_player, current_auction_set, filename, pkls
+  save_data({
+      'teams': teams,
+      'purse': purse,
+      'auction_sets': auction_sets,
+      'sale_history': sale_history,
+      'unsold_players': unsold_players,
+      'full_team_names': full_team_names,
+      'team_colors': team_colors,
+      'current_auction_set': current_auction_set,
+      'current_player': current_player,
+      'current_player_price': current_player_price,
+  })
 
+
+client.run(os.environ['TOKEN'])
