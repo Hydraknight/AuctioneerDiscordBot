@@ -13,11 +13,13 @@ import pickle
 import csv
 from keep_alive import keep_alive
 
-keep_alive() #keep alive doesnt work anymore on replit :(
+keep_alive()
 timer_running = False
 counter = 0
 sales_channel = None
 user_notifications = {}
+accelerated_players = set()
+
 # iterate through files to find highest numbered .pkl file
 pkls = []
 for files in os.listdir():
@@ -60,7 +62,7 @@ def save_data(data_to_save):
     # Save the data to the pickle file
     with open(file_name, 'wb') as file:
       pickle.dump(data_to_save, file)
-    for i in range(1, counter - 1):
+    for i in range(1, counter - 4):
       file = f'data_{i}.pkl'
       if os.path.exists(file):
         os.remove(file)
@@ -70,8 +72,8 @@ def save_data(data_to_save):
     print(f"Error saving data: {e}")
 
 
-MAX_PURSE = 40
-MAX_PLAYERS = 15
+MAX_PURSE = 100
+MAX_PLAYERS = 11  
 current_auction_set = None
 current_player = None
 current_player_price = None
@@ -152,6 +154,10 @@ auction_data = {
     'current_auction_set': current_auction_set,
     'current_player': current_player,
     'current_player_price': current_player_price,
+    'user_notifications': user_notifications,
+    'MAX_PLAYERS': MAX_PLAYERS,
+    'MAX_PURSE': MAX_PURSE,
+    'accelerated_players': accelerated_players
 }
 #############################################################
 # Events:
@@ -185,6 +191,7 @@ async def on_ready():
     user_notifications = loaded_data.get('user_notifications', {})
     MAX_PLAYERS = loaded_data.get('MAX_PLAYERS', MAX_PLAYERS)
     MAX_PURSE = loaded_data.get('MAX_PURSE', MAX_PURSE)
+    accelerated_players = loaded_data.get('accelerated_players', accelerated_players)
     # Extract more data as needed
   else:
     # Handle the case where no data was loaded (e.g., first run)
@@ -200,6 +207,7 @@ async def on_ready():
     current_player = None
     current_player_price = None
     user_notifications = {}
+    accelerated_players = set()
 
 
 #############################################################
@@ -263,7 +271,7 @@ async def on_message(message):
         await show_team(cmd, message.channel)
       # Shows Help embed
       elif cmd == 'help':
-        await show_help(message.channel)
+        await show_help(user, message.channel)
       # Shows specific set
       elif cmd.startswith('set '):
         cmd_args = cmd.split(' ')
@@ -378,22 +386,38 @@ async def on_message(message):
         await message.author.send(
             f"You will be notified when these players are live in auction: {', '.join(players_to_notify)}"
         )
-
-      save_data({
-          'teams': teams,
-          'purse': purse,
-          'auction_sets': auction_sets,
-          'sale_history': sale_history,
-          'unsold_players': unsold_players,
-          'full_team_names': full_team_names,
-          'team_colors': team_colors,
-          'current_auction_set': current_auction_set,
-          'current_player': current_player,
-          'current_player_price': current_player_price,
-          'user_notifications': user_notifications,
-          'max_players': MAX_PLAYERS,
-          'max_purse': MAX_PURSE
-      })
+      elif cmd.startswith('accelerated ') and is_auctioneer(user):
+        cmd_args = cmd.split(' ')
+        player_list = ' '.join(cmd_args[1:]).split(',')
+        player_list = [player.strip() for player in player_list]
+        if len(player_list) > 0:
+          await accelerated(player_list, message.channel)
+        else:
+          await message.channel.send(
+              "Invalid usage. Please use: $accelerated <player1>,<player2>,...")
+      elif cmd == 'accelerated' and is_auctioneer(user):
+        await accelerated(None, message.channel)
+      elif cmd == 'acc' and is_auctioneer(user):
+        await send_acc(user, message.channel)
+      elif cmd == 'undo' and is_auctioneer(user):
+        await undo(message.channel)
+      if cmd not in auction_sets and cmd not in teams and cmd not in ['ping','sets', 'timer', 'showteams', 'teams', 'sales', 'help',  'showunsold', 'undo']:
+        save_data({
+            'teams': teams,
+            'purse': purse,
+            'auction_sets': auction_sets,
+            'sale_history': sale_history,
+            'unsold_players': unsold_players,
+            'full_team_names': full_team_names,
+            'team_colors': team_colors,
+            'current_auction_set': current_auction_set,
+            'current_player': current_player,
+            'current_player_price': current_player_price,
+            'user_notifications': user_notifications,
+            'max_players': MAX_PLAYERS,
+            'max_purse': MAX_PURSE,
+            'accelerated_players': accelerated_players
+        })
       await message.delete()
     except Exception as e:
       print(e)
@@ -410,7 +434,8 @@ async def on_message(message):
           'current_player_price': current_player_price,
           'user_notifications': user_notifications,
           'max_players': MAX_PLAYERS,
-          'max_purse': MAX_PURSE
+          'max_purse': MAX_PURSE,
+          'accelerated_players': accelerated_players
       })
 
 
@@ -449,7 +474,7 @@ async def reset_sets_teams(channel):
   async def confirmed(interaction):
     global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, user_notifications, current_player_price, current_player, current_auction_set, filename, pkls
     if interaction.message == confirmation_message and is_auctioneer(
-        interaction.user):
+            interaction.user):
       teams = {}
       purse = {}
       auction_sets = copy.deepcopy(copy_auction_sets)
@@ -461,6 +486,7 @@ async def reset_sets_teams(channel):
       current_player = None
       current_player_price = None
       user_notifications = {}
+      pkls = []
       save_data(auction_data)
 
       success_embed = discord.Embed(
@@ -473,7 +499,7 @@ async def reset_sets_teams(channel):
 
   async def cancel_check(interaction):
     if interaction.message == confirmation_message and is_auctioneer(
-        interaction.user):
+            interaction.user):
       cancel_embed = discord.Embed(title="Reset Canceled",
                                    description="Reset operation canceled.",
                                    color=discord.Color.red())
@@ -547,8 +573,7 @@ async def set_max_purse(new_max_purse, channel):
   except ValueError:
     embed = discord.Embed(
         title="Maximum Purse",
-        description=
-        f"Invalid value for the maximum purse. Please provide a numeric value.",
+        description=f"Invalid value for the maximum purse. Please provide a numeric value.",
         color=discord.Color.red())
     await channel.send(embed=embed)
 
@@ -576,10 +601,64 @@ async def set_max_players(new_max_players, channel):
   except ValueError:
     embed = discord.Embed(
         title="Maximum Players",
-        description=
-        f"Invalid value for the maximum players. Please provide a numeric value.",
+        description=f"Invalid value for the maximum players. Please provide a numeric value.",
         color=discord.Color.red())
     await channel.send(embed=embed)
+
+#############################################################
+# Undo:
+#############################################################
+async def undo(channel):
+  global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, user_notifications, current_player_price, current_player, current_auction_set, filename, pkls, MAX_PLAYERS, MAX_PURSE
+  print("Undoing...")
+
+  filename = None
+  pkls = []
+  for files in os.listdir():
+    if files.endswith(".pkl"):
+      file = files.removesuffix(".pkl")
+      file = files.removeprefix("data_")
+      pkls.append(file)
+  pkls.sort()
+  print(pkls)
+  max_file = None
+  if len(pkls) != 0:
+    max_file = max(pkls)
+    
+    # Extract the number part and convert it to an integer
+    number_part = int(max_file.split('.')[0])
+    # Subtract 1 and append it back to the filename
+    max_file = "data_" + max_file
+    filename = "data_" + pkls[-2]
+    #filename = "data_" + str(number_part -1) + ".pkl"
+    print(max_file)
+    print(filename)
+  if filename is not None:
+    loaded_data = load_data(filename)
+    if loaded_data is not None:
+      # Extract individual components as needed
+      teams = loaded_data.get('teams', {})
+      purse = loaded_data.get('purse', {})
+      auction_sets = loaded_data.get('auction_sets', auction_sets)
+      sale_history = loaded_data.get('sale_history', [])
+      unsold_players = loaded_data.get('unsold_players', set())
+      full_team_names = loaded_data.get('full_team_names', {})
+      team_colors = loaded_data.get('team_colors', team_colors)
+      current_player_price = loaded_data.get('current_player_price', None)
+      current_player = loaded_data.get('current_player', None)
+      current_auction_set = loaded_data.get('current_auction_set', None)
+      user_notifications = loaded_data.get('user_notifications', {})
+      MAX_PLAYERS = loaded_data.get('MAX_PLAYERS', MAX_PLAYERS)
+      MAX_PURSE = loaded_data.get('MAX_PURSE', MAX_PURSE)
+      # Extract more data as needed
+      embed = discord.Embed(title="Undo",
+                            description="Undo successful.",
+                            color=discord.Color.green())
+      # Delete the latest savefile
+      if max_file is not None:
+        os.remove(max_file)
+      await channel.send(embed=embed)
+
 
 
 #############################################################
@@ -591,8 +670,7 @@ async def deny_timer(channel):
   if timer_running:
     embed = discord.Embed(
         title="Timer Already Running",
-        description=
-        "A timer is currently running. You cannot start a new timer until the current one finishes.",
+        description="A timer is currently running. You cannot start a new timer until the current one finishes.",
         color=discord.Color.red())
     msg = await channel.send(embed=embed)
     await asyncio.sleep(2)
@@ -614,8 +692,7 @@ async def timer(secs, channel):
   if secs > 30 or secs < 1:
     embed = discord.Embed(
         title="Timer",
-        description=
-        f"Timer cannot be set for more than 30 seconds and less than 1 second.",
+        description=f"Timer cannot be set for more than 30 seconds and less than 1 second.",
         color=discord.Color.red())
     await channel.send(embed=embed)
     return
@@ -662,7 +739,7 @@ async def timer(secs, channel):
           title="Timer",
           description="Timer has been stopped!",
           color=discord.Color.red()),
-                               view=None)
+          view=None)
       timer_running = False
       return
 
@@ -753,8 +830,7 @@ async def add_team(team_name, full_team_name, color_arg, channel):
     # Create an embedded message to announce the team creation
     embed = discord.Embed(
         title=f'Team Created: {full_team_name}({team_name})',
-        description=
-        f'Team "{full_team_name}" has been created with a purse of {MAX_PURSE:.2f}Cr.',
+        description=f'Team "{full_team_name}" has been created with a purse of {MAX_PURSE:.2f}Cr.',
         color=discord.Color.green())
 
     # Optionally set the embed color based on the color argument
@@ -766,8 +842,7 @@ async def add_team(team_name, full_team_name, color_arg, channel):
     # Create an embedded message to indicate that the team already exists
     embed = discord.Embed(
         title=f'Team Already Exists: {team_name}',
-        description=
-        f'Team {team_name} already exists as "{full_team_names[team_name]}".',
+        description=f'Team {team_name} already exists as "{full_team_names[team_name]}".',
         color=discord.Color.red())
     await channel.send(embed=embed)
 
@@ -790,8 +865,7 @@ async def show_teams(channel):
     # Create an embedded message to display team information
     embed = discord.Embed(
         title=f'Team: {full_team_names[team_name]}',
-        description=
-        f'Purse: **{purse_amount:.2f}Cr**\nPlayers: {players_list}\n',
+        description=f'Purse: **{purse_amount:.2f}Cr**\nPlayers: {players_list}\n',
         color=color)
 
     team_image_file = f'teams/{team_name}.png'
@@ -823,8 +897,7 @@ async def show_teams2(channel):
     # Create an embedded message to display team information
     embed = discord.Embed(
         title=f'Team: {full_team_names[team_name]}',
-        description=
-        f'Purse: **{purse_amount:.2f}Cr**\nPlayers: {players_list}\n',
+        description=f'Purse: **{purse_amount:.2f}Cr**\nPlayers: {players_list}\n',
         color=color)
     await channel.send(embed=embed)
     team_info.append(embed)
@@ -840,14 +913,24 @@ async def show_teams2(channel):
 async def sell_team(team_name, price, name, channel):
   global teams, purse, auction_sets, sale_history, unsold_players, full_team_names, team_colors, current_player_price, current_player, current_auction_set, sales_channel
 
+  if sales_channel is None:
+    sales_channel = discord.utils.get(
+          channel.guild.text_channels, name='sales')
   if team_name in teams:
     player_price = int(price)
-    if len(teams[team_name]) >= MAX_PLAYERS:
+    team_channel = discord.utils.get(
+        channel.guild.text_channels, name=team_name.lower())
+    
+    if name == "":
+      embed = discord.Embed(title=f'Invalid Usage',
+                            description=f'The player name is blank.',
+                            color=discord.Color.red())
+      await channel.send(embed=embed)
+    elif len(teams[team_name]) >= MAX_PLAYERS:
       # Create an embedded message to indicate that the team has reached the player limit
       embed = discord.Embed(
           title=f'Team Player Limit Reached: {team_name}',
-          description=
-          f'Team {team_name} has reached the maximum player limit of {MAX_PLAYERS} players.',
+          description=f'Team {team_name} has reached the maximum player limit of {MAX_PLAYERS} players.',
           color=discord.Color.red())
       await channel.send(embed=embed)
     else:
@@ -862,28 +945,53 @@ async def sell_team(team_name, price, name, channel):
         # Create an embedded message to announce the player sale
         embed = discord.Embed(
             title=f'Player Sold: {name}',
-            description=
-            f'**{name}** has been sold to **{full_team_names[team_name]}** for **{player_price/100:.2f}Cr**.',
+            description=f'**{name}** has been sold to **{full_team_names[team_name]}** for **{player_price/100:.2f}Cr**.',
             color=color)
         player_image_file = f'images/{name}.png'
         team_image_file = f'teams/{team_name}.png'
         files = []  # List to store files to be sent as attachments
 
+        player_image_file = f'images/{name}.png'
         if os.path.isfile(player_image_file):
-          player_image = discord.File(player_image_file, filename='Player.png')
-          files.append(player_image)
-          # Player image as an attachment
-          embed.set_image(url="attachment://Player.png")
+            with open(player_image_file, 'rb') as player_image_file:
+                player_image = discord.File(
+                    player_image_file, filename='Player.png')
+                files.append(player_image)
+                embed.set_image(url="attachment://Player.png")
 
+        # Check if team image exists and add it if available
+        team_image_file = f'teams/{team_name}.png'
         if os.path.isfile(team_image_file):
-          team_image = discord.File(team_image_file, filename='Team.png')
-          files.append(team_image)
-          embed.set_thumbnail(
-              url="attachment://Team.png")  # Team image as a thumbnail
+            with open(team_image_file, 'rb') as team_image_file:
+                team_image = discord.File(team_image_file, filename='Team.png')
+                files.append(team_image)
+                # Team image as a thumbnail
+                embed.set_thumbnail(url="attachment://Team.png")
 
         await channel.send(files=files, embed=embed)
+        files = []  # List to store files to be sent as attachments
+
+        player_image_file = f'images/{name}.png'
+        if os.path.isfile(player_image_file):
+            with open(player_image_file, 'rb') as player_image_file:
+                player_image = discord.File(
+                    player_image_file, filename='Player.png')
+                files.append(player_image)
+                embed.set_image(url="attachment://Player.png")
+
+        # Check if team image exists and add it if available
+        team_image_file = f'teams/{team_name}.png'
+        if os.path.isfile(team_image_file):
+            with open(team_image_file, 'rb') as team_image_file:
+                team_image = discord.File(team_image_file, filename='Team.png')
+                files.append(team_image)
+                # Team image as a thumbnail
+                embed.set_thumbnail(url="attachment://Team.png")
+
         if sales_channel:
           await sales_channel.send(embed=embed)  # type: ignore
+        if team_channel and files:
+          await team_channel.send(files=files, embed=embed)  # type: ignore
         for set_name, players in auction_sets.items():
           if name in players:
             players.remove(name)
@@ -893,8 +1001,7 @@ async def sell_team(team_name, price, name, channel):
       else:
         embed = discord.Embed(
             title=f'Team Over Budget!: {team_name}',
-            description=
-            f'Team "{team_name}" has exceeded their maximum budget.',
+            description=f'Team "{team_name}" has exceeded their maximum budget.',
             color=discord.Color.red())
         await channel.send(embed=embed)
   else:
@@ -920,8 +1027,7 @@ async def unsold(channel):
     # Create an embedded message to confirm the player is marked as unsold
     embed = discord.Embed(
         title="Player Marked as Unsold",
-        description=
-        f'{current_player} has been marked as unsold and saved for later use.',
+        description=f'{current_player} has been marked as unsold and saved for later use.',
         color=discord.Color.greyple())
     await channel.send(embed=embed)
     current_player = None
@@ -1002,22 +1108,35 @@ async def remove_player(team_name, player_name, channel):
       del teams[team_name][player_name]
       for sale in sale_history:
         if sale["team_name"] == full_team_names[team_name] and sale[
-            "player_name"] == player_name:
+                "player_name"] == player_name:
           sale_history.remove(sale)
 
       # Create an embedded message to announce the player removal
       embed = discord.Embed(
           title=f'Player Removed: {player_name}',
-          description=
-          f'{player_name} has been removed from Team: {full_team_names[team_name]}.',
+          description=f'{player_name} has been removed from Team: {full_team_names[team_name]}.',
           color=discord.Color.green())
       await channel.send(embed=embed)
+    elif player_name == 'NULL':
+      player_name = ''
+      player_price = teams[team_name][player_name]
+      purse[team_name] += player_price / 100
+      del teams[team_name][player_name]
+      for sale in sale_history:
+        if sale["team_name"] == full_team_names[team_name] and sale[
+                "player_name"] == player_name:
+          sale_history.remove(sale)
+
+      # Create an embedded message to announce the player removal
+      embed = discord.Embed(
+          title=f'Null Player Removed',
+          description=f'Null Player has been removed from Team: {full_team_names[team_name]}.',
+          color=discord.Color.green())
     else:
       # Create an embedded message to indicate that the player is not found in the team
       embed = discord.Embed(
           title=f'Player Not Found: {player_name}',
-          description=
-          f'{player_name} is not found in Team: {full_team_names[team_name]}.',
+          description=f'{player_name} is not found in Team: {full_team_names[team_name]}.',
           color=discord.Color.red())
       await channel.send(embed=embed)
   else:
@@ -1057,8 +1176,7 @@ async def remove_team(team_name, channel):
                         color=discord.Color.green())
   embed.add_field(
       name="Team Removed",
-      value=
-      f"The team '{team_name}' has been removed, and all its players are set as unsold at 1 Cr."
+      value=f"The team '{team_name}' has been removed, and all its players are set as unsold at 1 Cr."
   )
   await channel.send(embed=embed)
 
@@ -1073,6 +1191,7 @@ async def request_player(user, player_name, channel):
   global auction_sets
   global unsold_players
   global current_player
+  global current_player_price
 
   # Attempt to acquire the semaphore
   async with request_semaphore:
@@ -1080,8 +1199,7 @@ async def request_player(user, player_name, channel):
     if current_player is not None:
       embed = discord.Embed(
           title=f"Request Denied for {player_name}",
-          description=
-          f"A player is currently being auctioned: {current_player}",
+          description=f"A player is currently being auctioned: {current_player}",
           color=discord.Color.red())
       await channel.send(embed=embed)
       return
@@ -1098,31 +1216,30 @@ async def request_player(user, player_name, channel):
     # Send a message indicating that the request is pending confirmation
     confirmation_embed = discord.Embed(
         title=f'Request for **{player_name}**',
-        description=
-        f'{user} is requesting for **{player_name}** to be put on sale.',
+        description=f'{user} is requesting for **{player_name}** to be put on sale.',
         color=discord.Color.red())
     confirmation_embed.add_field(name="Auctioneer to confirm:",
                                  value="Please confirm or deny this request.",
                                  inline=False)
 
     def check_stop(interaction):
+      if interaction is None:
+        return True
       return is_auctioneer(
           interaction.user) and interaction.message == confirmation_message
 
     # Send the confirmation embed
-    confirmation_message = await channel.send(embed=confirmation_embed)
-    confirm = Button(style=discord.ButtonStyle.green, label="Confirm")
-    cancel = Button(style=discord.ButtonStyle.red, label="Cancel")
-    view = View()
-    view.add_item(confirm)
-    view.add_item(cancel)
-    await confirmation_message.edit(view=view)
+    
+    
 
     # Define a check function to check which button they clicked
     async def confirmed(interaction):
       # Check if the requested player is in any of the auction sets
-      global current_player
-      await confirmation_message.delete()
+      if not check_stop(interaction):
+        return
+      global current_player, current_player_price 
+      if confirmation_message is not None:
+        await confirmation_message.delete()
       for set_name, players in auction_sets.items():
         if player_name in players:
           # Send the player's card
@@ -1153,6 +1270,7 @@ async def request_player(user, player_name, channel):
 
           # Remove the player from the auction set
           current_player = player_name
+          current_player_price = base_price
           players.remove(player_name)
           return
 
@@ -1178,12 +1296,13 @@ async def request_player(user, player_name, channel):
       # If the player is not found in either set, send a message
       embed = discord.Embed(
           title=f"Player Not Found: {player_name}",
-          description=
-          "The requested player was not found in the auction sets or the unsold players set.",
+          description="The requested player was not found in the auction sets or the unsold players set.",
           color=discord.Color.red())
       await channel.send(embed=embed)
 
     async def cancel_check(interaction):
+      if not check_stop(interaction):
+        return
       cancel_embed = discord.Embed(
           title="Denied request",
           description=f"Request denied  for **{player_name}**.",
@@ -1191,9 +1310,19 @@ async def request_player(user, player_name, channel):
       await channel.send(embed=cancel_embed)
       await confirmation_message.delete()
       return
-
-    confirm.callback = confirmed
-    cancel.callback = cancel_check
+    if(is_auctioneer(user)):
+      confirmation_message = None
+      await confirmed(None)
+    else:
+      confirmation_message = await channel.send(embed=confirmation_embed)
+      confirm = Button(style=discord.ButtonStyle.green, label="Confirm")
+      cancel = Button(style=discord.ButtonStyle.red, label="Cancel")
+      view = View()
+      view.add_item(confirm)
+      view.add_item(cancel)
+      await confirmation_message.edit(view=view)
+      confirm.callback = confirmed
+      cancel.callback = cancel_check
 
 
 ##################################################################
@@ -1227,8 +1356,7 @@ async def show_team(team_name, channel):
 
     embed = discord.Embed(
         title=f'Team: {full_team_name}',
-        description=
-        f'**Remaining Purse: {purse_amount}**\n\nPlayers:\n{players_message}',
+        description=f'**Remaining Purse: {purse_amount}**\n\nPlayers:\n{players_message}',
         color=team_colors.get(original_team_name, discord.Color.green()))
     team_image_file = f'teams/{team_name}.png'
     if os.path.isfile(team_image_file):
@@ -1244,6 +1372,49 @@ async def show_team(team_name, channel):
                           color=discord.Color.red())
     await channel.send(embed=embed)
 
+##################################################################
+# Accelerated Auction
+##################################################################
+async def accelerated(players, channel):
+  global auction_sets
+  global unsold_players
+  global accelerated_players
+  if players is not None:
+    for set_name, player_list in list(auction_sets.items()):  # Convert to list to avoid RuntimeError
+      for player in player_list:
+        #print(player)
+        if player.lower() in [p.lower() for p in players]:
+          accelerated_players.add(player)
+          #auction_sets[set_name].remove(player)  # Remove player from the set
+    #unsold_players = [player for player in unsold_players if player.lower() not in players.lower()]  # Remove player from unsold_players
+    for player in list(unsold_players):
+      if player[0].lower() in [p.lower() for p in players]:
+        accelerated_players.add(player[0])
+
+  if len(accelerated_players) > 0:
+    embed = discord.Embed(title="Accelerated Auction",
+                color=discord.Color.blue())
+    embed.add_field(
+      name="Players Listed in Accelerated Auction:",
+      value=", ".join(accelerated_players)
+    )
+    await channel.send(embed=embed)
+  else:
+    await channel.send("No players found for accelerated auction.")
+
+async def send_acc(user, channel):
+  global accelerated_players
+  global current_player_price
+  global current_player
+  global current_auction_set
+  if current_player is not None:
+    await complete_sale(channel)
+    return None
+  if len(accelerated_players) > 0:
+    player = accelerated_players.pop()
+    await request_player(user, player, channel)
+  else:
+    await channel.send("No players found for accelerated auction.")
 
 ##################################################################
 # Sale History:
@@ -1319,8 +1490,7 @@ async def trade(team1_name, team2_name, players, channel):
                             color=discord.Color.green())
       embed.add_field(
           name=f"Trade Details",
-          value=
-          f"**{player2_name}** from **{team2_name}** bought for **{player1_value/100}Cr** by **{team1_name}**."
+          value=f"**{player2_name}** from **{team2_name}** bought for **{player1_value/100}Cr** by **{team1_name}**."
       )
       await channel.send(embed=embed)
 
@@ -1344,8 +1514,7 @@ async def trade(team1_name, team2_name, players, channel):
                             color=discord.Color.green())
       embed.add_field(
           name=f"Trade Details",
-          value=
-          f"**{player1_name}** from **{team1_name}** bought for **{player2_value/100}Cr** by **{team2_name}**."
+          value=f"**{player1_name}** from **{team1_name}** bought for **{player2_value/100}Cr** by **{team2_name}**."
       )
       await channel.send(embed=embed)
       return
@@ -1360,12 +1529,11 @@ async def trade(team1_name, team2_name, players, channel):
 
   # Check if both players exist in their respective teams
   if player1_name not in teams[team1_name] or player2_name not in teams[
-      team2_name]:
+          team2_name]:
     embed = discord.Embed(title="Trade Failed", color=discord.Color.red())
     embed.add_field(
         name="Error",
-        value=
-        "One or both of the players do not exist in their respective teams.")
+        value="One or both of the players do not exist in their respective teams.")
     await channel.send(embed=embed)
     return
 
@@ -1375,7 +1543,7 @@ async def trade(team1_name, team2_name, players, channel):
 
   # Check if both teams can afford the trade
   if (purse[team1_name] + player1_value / 100 - player2_value / 100 < 0) or (
-      purse[team2_name] + player2_value / 100 - player1_value / 100 < 0):
+          purse[team2_name] + player2_value / 100 - player1_value / 100 < 0):
     embed = discord.Embed(title="Trade Failed", color=discord.Color.red())
     embed.add_field(name="Error",
                     value="One or both teams cannot afford this trade.")
@@ -1403,8 +1571,7 @@ async def trade(team1_name, team2_name, players, channel):
   embed = discord.Embed(title="Trade Successful", color=discord.Color.green())
   embed.add_field(
       name=f"Trade Details",
-      value=
-      f"{player1_name} from {team1_name} traded for {player2_name} from {team2_name}."
+      value=f"{player1_name} from {team1_name} traded for {player2_name} from {team2_name}."
   )
   await channel.send(embed=embed)
   if sales_channel:
@@ -1479,7 +1646,7 @@ async def export(channel):
 ##################################################################
 
 
-async def show_help(channel):
+async def show_help(user, channel):
   embed = discord.Embed(title='Help Commands for Auctioneer:',
                         description='Here are the available commands:',
                         color=discord.Color.red())
@@ -1494,8 +1661,7 @@ async def show_help(channel):
                   inline=False)
   embed.add_field(
       name='$trade <team1> <team2> <player1>/<player2>',
-      value=
-      'Trades a player from one team to another.\nPurchases one player from other team if one of the player fields is a number, in Lakhs',
+      value='Trades a player from one team to another.\nPurchases one player from other team if one of the player fields is a number, in Lakhs',
       inline=False)
   embed.add_field(name='$<set_name>',
                   value='Displays a random player from the set.',
@@ -1522,7 +1688,14 @@ async def show_help(channel):
   embed.add_field(name='$export',
                   value='Exports the data to a csv file.',
                   inline=False)
-  await channel.send(embed=embed)
+  embed.add_field(name='$accelerated <player1>, <player2>, ...',
+                  value="Makes an accelerated auction set for the given players.",
+                  inline=False)
+  embed.add_field(name='$acc',
+                  value="Sends a random player from the accelerated auction set.",
+                  inline=False)
+  if(is_auctioneer(user)):
+    await channel.send(embed=embed)
   embed = discord.Embed(title='Help Commands for All Users:',
                         description='Here are the available commands:',
                         color=discord.Color.brand_green())
@@ -1553,8 +1726,7 @@ async def show_help(channel):
                   inline=False)
   embed.add_field(
       name='$notify <player(s) seperated by comma>',
-      value=
-      'Notifies you when the player is live in the auction.(Can use in DM)',
+      value='Notifies you when the player is live in the auction.(Can use in DM)',
       inline=False)
 
   await channel.send(embed=embed)
@@ -1575,6 +1747,5 @@ async def on_disconnect():
       'current_player': current_player,
       'current_player_price': current_player_price,
   })
-
 
 client.run(os.environ['TOKEN'])
